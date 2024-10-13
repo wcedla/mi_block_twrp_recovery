@@ -1,7 +1,23 @@
 #include "kernel_module_loader.hpp"
 #include "common.h"
+#include "variables.h"
 
 const std::vector<std::string> kernel_modules_requested = TWFunc::split_string(EXPAND(TW_LOAD_VENDOR_MODULES), ' ', true);
+
+BOOT_MODE KernelModuleLoader::Get_Boot_Mode() {
+	std::string cmdline;
+	std::string bootconfig;
+	android::base::ReadFileToString("/proc/bootconfig", &bootconfig);
+	android::base::ReadFileToString("/proc/cmdline", &cmdline);
+
+	if (cmdline.find("twrpfastboot=1") != std::string::npos && (bootconfig.find("androidboot.force_normal_boot = \"1\"") != std::string::npos ||
+		cmdline.find("androidboot.force_normal_boot=1") != std::string::npos))
+		return RECOVERY_FASTBOOT_MODE;
+	else if (android::base::GetProperty(TW_FASTBOOT_MODE_PROP, "0") == "1")
+		return FASTBOOTD_MODE;
+
+	return RECOVERY_IN_BOOT_MODE;
+}
 
 bool KernelModuleLoader::Load_Vendor_Modules() {
 	// check /lib/modules (ramdisk vendor_boot)
@@ -12,6 +28,7 @@ bool KernelModuleLoader::Load_Vendor_Modules() {
 	// check /vendor/lib/modules/N.N (vendor mounted)
 	// check /vendor/lib/modules/N.N-gki (vendor mounted)
 	// check /vendor_dlkm/lib/modules (vendor_dlkm mounted)
+	if (android::base::GetBoolProperty(TW_MODULES_MOUNTED_PROP, false)) return true;
 	int modules_loaded = 0;
 
 	LOGINFO("Attempting to load modules\n");
@@ -43,14 +60,29 @@ bool KernelModuleLoader::Load_Vendor_Modules() {
 	vendor_module_dirs.push_back(vendor_base_dir + gki);
 #endif
 
-	for (auto&& module_dir:module_dirs) {
-		modules_loaded += Try_And_Load_Modules(module_dir, false);
-		if (modules_loaded >= expected_module_count) goto exit;
-	}
+	switch(Get_Boot_Mode()) {
+		case RECOVERY_FASTBOOT_MODE:
+			/* On bootmode: once, there is not always stock kernel
+			 * so try only with twrp prebuilt modules.
+			 */
+			for (auto&& module_dir:vendor_module_dirs) {
+				modules_loaded += Try_And_Load_Modules(module_dir, false);
+				if (modules_loaded >= expected_module_count) goto exit;
+			}
+			break;
 
-	for (auto&& module_dir:vendor_module_dirs) {
-		modules_loaded += Try_And_Load_Modules(module_dir, false);
-		if (modules_loaded >= expected_module_count) goto exit;
+		case FASTBOOTD_MODE:
+		case RECOVERY_IN_BOOT_MODE:
+#ifdef TW_LOAD_VENDOR_BOOT_MODULES
+			for (auto&& module_dir:module_dirs) {
+				modules_loaded += Try_And_Load_Modules(module_dir, false);
+				if (modules_loaded >= expected_module_count) goto exit;
+			}
+#endif
+			/* In both mode vendor_boot or vendor modules are used
+			 * Because Ramdisk is flashed in both.
+			 */
+			break;
 	}
 
 	if (ven) {
@@ -74,9 +106,9 @@ exit:
 	if (ven)
 		ven->UnMount(false);
 	if (ven_dlkm)
-		ven_dlkm->UnMount(false);
+		ven_dlkm->UnMount(false, MNT_DETACH);
 
-	android::base::SetProperty("twrp.modules.loaded", "true");
+	android::base::SetProperty(TW_MODULES_MOUNTED_PROP, "true");
 
 	return true;
 }
@@ -98,7 +130,7 @@ int KernelModuleLoader::Try_And_Load_Modules(std::string module_dir, bool vendor
 			Modprobe m({module_dir}, "modules.load.twrp", false);
 			m.LoadListedModules(false);
 			modules_loaded = m.GetModuleCount();
-			umount2(module_dir.c_str(), MNT_DETACH);
+			PartitionManager.UnMount_By_Path(module_dir.c_str(), false, MNT_DETACH);
 			LOGINFO("Modules Loaded: %d\n", modules_loaded);
 		}
 		return modules_loaded;

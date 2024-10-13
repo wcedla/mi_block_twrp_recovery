@@ -75,6 +75,10 @@
 #include "twrpRepacker.hpp"
 #include "adbbu/libtwadbbu.hpp"
 
+#ifdef TW_LOAD_VENDOR_MODULES
+#include "kernel_module_loader.hpp"
+#endif
+
 #ifdef TW_HAS_MTP
 #ifdef TW_HAS_LEGACY_MTP
 #include "mtp/legacy/mtp_MtpServer.hpp"
@@ -202,6 +206,62 @@ void inline Reset_Prop_From_Partition(std::string prop, std::string def, TWParti
 			LOGINFO("Deleting property '%s'\n", prop.c_str());
 		}
 	}
+}
+
+void inline Process_ResetProps(TWPartition *ven, TWPartition *odm) {
+	// Reset the crypto volume props according to os.
+	Reset_Prop_From_Partition("ro.crypto.dm_default_key.options_format.version", "", ven, odm);
+	Reset_Prop_From_Partition("ro.crypto.volume.metadata.method", "", ven, odm);
+	Reset_Prop_From_Partition("ro.crypto.volume.options", "", ven, odm);
+	Reset_Prop_From_Partition("external_storage.projid.enabled", "", ven, odm);
+	Reset_Prop_From_Partition("external_storage.casefold.enabled", "", ven, odm);
+	Reset_Prop_From_Partition("external_storage.sdcardfs.enabled", "", ven, odm);
+}
+
+static inline std::string KM_Ver_From_Manifest(std::string ver) {
+	TWFunc::Get_Service_From_Manifest("/vendor", "android.hardware.keymaster", ver);
+	if (strstr(ver.c_str(), "4")) {
+		ver = "4.x";
+	}
+	return ver;
+}
+
+void inline Process_Keymaster_Version(TWPartition *ven, bool Display_Error) {
+	// Fetch the Keymaster Service version to be started
+	std::string version;
+#ifndef TW_FORCE_KEYMASTER_VER
+	version = KM_Ver_From_Manifest(version);
+
+	/* If we are unable to get the version from device vendor then
+		* set the version from the keymaster_ver prop if set
+		*/
+	if (version.empty()) {
+		// unmount partition(s)
+		if (ven) ven->UnMount(Display_Error);
+
+		// Use keymaster_ver prop set from device tree (if exists)
+		version = android::base::GetProperty(TW_KEYMASTER_VERSION_PROP, version);
+		if (version.empty()) {
+			LOGINFO("Keymaster_Ver::Unable to find vendor manifest on the device, and no default value set. Checking the ramdisk manifest\n");
+			version = KM_Ver_From_Manifest(version);
+		} else {
+			LOGINFO("Keymaster_Ver::Unable to find vendor manifest on the device. Setting to default value.\n");
+		}
+	} else {
+		if (ven) ven->UnMount(Display_Error);
+	}
+#else
+	if (ven) ven->UnMount(Display_Error);
+
+	version = android::base::GetProperty(TW_KEYMASTER_VERSION_PROP, version);
+	if (version.empty()) {
+		LOGINFO("Keymaster_Ver::Force Keymaster_Ver flag found, but keymaster_ver prop not set.\n");
+	} else {
+		LOGINFO("Keymaster_Ver::Force Keymaster_Ver flag found.\n");
+	}
+#endif
+	LOGINFO("Keymaster_Ver::Using keymaster version '%s' for decryption\n", version.c_str());
+	android::base::SetProperty(TW_KEYMASTER_VERSION_PROP, version.c_str());
 }
 
 static constexpr const char* __unused BOOT_DEV_PATH = "/dev/block/bootdevice/by-name/boot";
@@ -361,7 +421,9 @@ int TWPartitionManager::Process_Fstab(string Fstab_Filename, bool Display_Error,
 	}
 	TWPartition *data = NULL;
 	TWPartition *meta = NULL;
+#ifndef TW_SKIP_ADDITIONAL_FSTAB
 parse:
+#endif
 	fstabFile = fopen(Fstab_Filename.c_str(), "rt");
 	if (!parse_userdata && fstabFile == NULL) {
 		LOGERR("Critical Error: Unable to open fstab at '%s'.\n", Fstab_Filename.c_str());
@@ -432,37 +494,43 @@ clear:
 			mapit->second.fstab_line = NULL;
 		}
 	}
+
+#ifdef TW_LOAD_VENDOR_MODULES
+	KernelModuleLoader::Load_Vendor_Modules();
+#endif
+
 	TWPartition* ven = PartitionManager.Find_Partition_By_Path("/vendor");
 	TWPartition* odm = PartitionManager.Find_Partition_By_Path("/odm");
-	if (!parse_userdata) {
-
+	if (recovery_mode && !parse_userdata) {
 		if (ven) ven->Mount(Display_Error);
 		if (odm) odm->Mount(Display_Error);
+
+		Process_ResetProps(ven, odm);
+		parse_userdata = true;
+
+#ifndef TW_SKIP_ADDITIONAL_FSTAB
+		// Now Fetch the additional fstab
 		if (TWFunc::Find_Fstab(Fstab_Filename)) {
-			string service;
 			LOGINFO("Fstab: %s\n", Fstab_Filename.c_str());
 			TWFunc::copy_file(Fstab_Filename, additional_fstab, 0600, false);
 			Fstab_Filename = additional_fstab;
 			property_set("fstab.additional", "1");
-			TWFunc::Get_Service_From(ven, "keymaster", service);
-			LOGINFO("Keymaster version: '%s'\n", TWFunc::Get_Version_From_Service(service).c_str());
-			property_set("keymaster_ver", TWFunc::Get_Version_From_Service(service).c_str());
-			parse_userdata = true;
-			Reset_Prop_From_Partition("ro.crypto.dm_default_key.options_format.version", "", ven, odm);
-			Reset_Prop_From_Partition("ro.crypto.volume.metadata.method", "", ven, odm);
-			Reset_Prop_From_Partition("ro.crypto.volume.options", "", ven, odm);
-			Reset_Prop_From_Partition("external_storage.projid.enabled", "", ven, odm);
-			Reset_Prop_From_Partition("external_storage.casefold.enabled", "", ven, odm);
-			Reset_Prop_From_Partition("external_storage.sdcardfs.enabled", "", ven, odm);
 			goto parse;
 		} else {
 			LOGINFO("Unable to parse vendor fstab\n");
 		}
 	}
-	if (ven) ven->UnMount(Display_Error);
-	if (odm) odm->UnMount(Display_Error);
 	LOGINFO("Done processing fstab files\n");
+#else
+		LOGINFO("Skipping Additional Fstab Processing\n");
+		property_set("fstab.additional", "0");
+	}
+#endif
 
+	if (odm) odm->UnMount(Display_Error);
+	if (recovery_mode)
+		Process_Keymaster_Version(ven, false);
+	if (ven) ven->UnMount(Display_Error);
 	return true;
 }
 
@@ -833,7 +901,7 @@ int TWPartitionManager::Mount_By_Path(string Path, bool Display_Error) {
 	return false;
 }
 
-int TWPartitionManager::UnMount_By_Path(string Path, bool Display_Error) {
+int TWPartitionManager::UnMount_By_Path(string Path, bool Display_Error, int flags) {
 	std::vector<TWPartition*>::iterator iter;
 	int ret = false;
 	bool found = false;
@@ -842,10 +910,10 @@ int TWPartitionManager::UnMount_By_Path(string Path, bool Display_Error) {
 	// Iterate through all partitions
 	for (iter = Partitions.begin(); iter != Partitions.end(); iter++) {
 		if ((*iter)->Mount_Point == Local_Path || (!(*iter)->Symlink_Mount_Point.empty() && (*iter)->Symlink_Mount_Point == Local_Path)) {
-			ret = (*iter)->UnMount(Display_Error);
+			ret = (*iter)->UnMount(Display_Error, flags);
 			found = true;
 		} else if ((*iter)->Is_SubPartition && (*iter)->SubPartition_Of == Local_Path) {
-			(*iter)->UnMount(Display_Error);
+			(*iter)->UnMount(Display_Error, flags);
 		}
 	}
 	if (found) {
@@ -1787,6 +1855,7 @@ int TWPartitionManager::Wipe_Android_Secure(void) {
 int TWPartitionManager::Format_Data(void) {
 	TWPartition* dat = Find_Partition_By_Path("/data");
 	TWPartition* metadata = Find_Partition_By_Path("/metadata");
+	int ret = false;
 	if (metadata != NULL)
 		metadata->UnMount(false);
 
@@ -1801,7 +1870,10 @@ int TWPartitionManager::Format_Data(void) {
 			if (!Check_Pending_Merges())
 				return false;
 		}
-		return dat->Wipe_Encryption();
+		ret = dat->Wipe_Encryption();
+		if (ret)
+			TWFunc::check_and_run_script("/system/bin/formatdata.sh", "Format Data Script");
+		return ret;
 	} else {
 		gui_msg(Msg(msg::kError, "unable_to_locate=Unable to locate {1}.")("/data"));
 		return false;
@@ -2713,8 +2785,13 @@ void TWPartitionManager::Get_Partition_List(string ListType, std::vector<Partiti
 				Partition_List->push_back(part);
 			}
 		}
-		if (DataManager::GetIntValue("tw_has_repack_tools") != 0 && DataManager::GetIntValue("tw_has_boot_slots") != 0) {
-			TWPartition* boot = Find_Partition_By_Path("/boot");
+		if (DataManager::GetIntValue("tw_has_repack_tools") != 0 && DataManager::GetIntValue("tw_has_boot_slots") != 0 && DataManager::GetIntValue("tw_include_install_recovery_ramdisk") != 0) {
+			std::string dest_partition = "/boot";
+			#ifdef BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT
+				dest_partition = "/vendor_boot";
+			#endif
+
+			TWPartition* boot = Find_Partition_By_Path(dest_partition);
 			if (boot) {
 				// Allow flashing kernels and ramdisks
 				struct PartitionList repack_ramdisk;
@@ -2722,6 +2799,7 @@ void TWPartitionManager::Get_Partition_List(string ListType, std::vector<Partiti
 				repack_ramdisk.Mount_Point = "/repack_ramdisk";
 				repack_ramdisk.selected = 0;
 				Partition_List->push_back(repack_ramdisk);
+				LOGINFO("Install Recovery Ramdisk: target partition=%s\n", dest_partition.c_str());
 				/*struct PartitionList repack_kernel; For now let's leave repacking kernels under advanced only
 				repack_kernel.Display_Name = gui_lookup("install_kernel", "Install Kernel");
 				repack_kernel.Mount_Point = "/repack_kernel";
@@ -3194,7 +3272,6 @@ bool TWPartitionManager::Decrypt_Adopted() {
 		}
 	}
 
-	//Devices without encryption do not run the Post_Decrypt function so the "data/recovery" folder was not being created on these devices
 	DataManager::SetValue("tw_settings_path", TW_STORAGE_PATH);
 	LOGINFO("Decrypt adopted storage starting\n");
 	char* xmlFile = PageManager::LoadFileToBuffer(path, NULL);
@@ -3755,7 +3832,7 @@ bool TWPartitionManager::Unmap_Super_Devices() {
 			TWPartition *part = *iter;
 			std::string bare_partition_name = Get_Bare_Partition_Name((*iter)->Get_Mount_Point());
 			std::string blk_device_partition = bare_partition_name;
-			if (DataManager::GetStrValue(TW_VIRTUAL_AB_ENABLED) == "1")
+			if (DataManager::GetStrValue("tw_has_boot_slots") == "1")
 				blk_device_partition.append(PartitionManager.Get_Active_Slot_Suffix());
 			(*iter)->UnMount(false);
 			LOGINFO("removing dynamic partition: %s\n", blk_device_partition.c_str());

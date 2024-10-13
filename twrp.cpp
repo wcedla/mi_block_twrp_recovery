@@ -48,10 +48,6 @@ extern "C" {
 #include "twrp-functions.hpp"
 #include "data.hpp"
 
-#ifdef TW_LOAD_VENDOR_MODULES
-#include "kernel_module_loader.hpp"
-#endif
-
 #include "partitions.hpp"
 #ifdef __ANDROID_API_N__
 #include <android-base/strings.h>
@@ -389,6 +385,7 @@ int main(int argc, char **argv) {
 	DataManager::SetDefaultValues();
 	startupArgs startup;
 	startup.parse(&argc, &argv);
+	android::base::SetProperty(TW_FASTBOOT_MODE_PROP, startup.Get_Fastboot_Mode() ? "1" : "0");
 	printf("=> Linking mtab\n");
 	symlink("/proc/mounts", "/etc/mtab");
 	std::string fstab_filename = "/etc/twrp.fstab";
@@ -403,19 +400,12 @@ int main(int argc, char **argv) {
 
 #ifdef TW_LOAD_VENDOR_MODULES
 	if (startup.Get_Fastboot_Mode()) {
-		android::base::SetProperty("ro.twrp.fastbootd", "1");
-		std::vector<std::string> prepareParts = {
-			"/system_root",
-			"/vendor",
-			"/vendor_dlkm",
-			"/odm"
-		};
-		for (auto& preparePart : prepareParts) {
-			TWPartition *part = PartitionManager.Find_Partition_By_Path(preparePart);
-			if (part) PartitionManager.Prepare_Super_Volume(part);
+		TWPartition* ven_dlkm = PartitionManager.Find_Partition_By_Path("/vendor_dlkm");
+		PartitionManager.Prepare_Super_Volume(PartitionManager.Find_Partition_By_Path("/vendor"));
+		if(ven_dlkm) {
+			PartitionManager.Prepare_Super_Volume(ven_dlkm);
 		}
 	}
-	KernelModuleLoader::Load_Vendor_Modules();
 #endif
 
 	printf("Starting the UI...\n");
@@ -439,6 +429,38 @@ int main(int argc, char **argv) {
 	// Function to monitor battery in the background
 	auto monitorBatteryInBackground = [&]() {
 		while (true) {
+#ifdef TW_USE_LEGACY_BATTERY_SERVICES
+			char cap_s[4];
+#ifdef TW_CUSTOM_BATTERY_PATH
+			string capacity_file = EXPAND(TW_CUSTOM_BATTERY_PATH);
+			capacity_file += "/capacity";
+			FILE * cap = fopen(capacity_file.c_str(),"rt");
+#else
+			FILE * cap = fopen("/sys/class/power_supply/battery/capacity","rt");
+#endif
+			if (cap) {
+				fgets(cap_s, 4, cap);
+				fclose(cap);
+				lastVal = atoi(cap_s);
+				if (lastVal > 100)	lastVal = 101;
+				if (lastVal < 0)	lastVal = 0;
+			}
+#ifdef TW_CUSTOM_BATTERY_PATH
+			string status_file = EXPAND(TW_CUSTOM_BATTERY_PATH);
+			status_file += "/status";
+			cap = fopen(status_file.c_str(),"rt");
+#else
+			cap = fopen("/sys/class/power_supply/battery/status","rt");
+#endif
+			if (cap) {
+				fgets(cap_s, 2, cap);
+				fclose(cap);
+				if (cap_s[0] == 'C')
+					charging = '+';
+				else
+					charging = ' ';
+			}
+#else
 			auto battery_info = GetBatteryInfo();
 			if (battery_info.charging) {
 				charging = '+';
@@ -446,6 +468,7 @@ int main(int argc, char **argv) {
 				charging = ' ';
 			}
 			lastVal = battery_info.capacity;
+#endif
 			// Format the value based on the background updates
 			value = std::to_string(lastVal) + "%" + charging;
 			DataManager::SetValue("tw_battery", value);

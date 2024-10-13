@@ -17,7 +17,7 @@
 #ifndef _VARIABLES_HEADER_
 #define _VARIABLES_HEADER_
 
-#define TW_MAIN_VERSION_STR       "3.7.0_12"
+#define TW_MAIN_VERSION_STR       "3.7.1_12"
 #define TW_VERSION_STR TW_MAIN_VERSION_STR TW_DEVICE_VERSION
 #define TW_PERSIST_DIR              "/persist/TWRP"
 #define TW_SETTINGS_FILE            ".twrps_sk"
@@ -154,11 +154,17 @@
 #define TW_VIRTUAL_AB_ENABLED       "tw_virtual_ab.enabled"
 #define TW_AUTO_REFLASHTWRP_VAR     "tw_auto_reflashtwrp"
 
+// BUILD PROPS
+#define TW_FASTBOOT_MODE_PROP         "ro.twrp.fastbootd"
+#define TW_MODULES_MOUNTED_PROP       "twrp.modules.loaded"     // property for successfully mounted modules
+#define TW_KEYMASTER_VERSION_PROP     "keymaster_ver"
+
 // Theme versioning
 // version 2 requires theme to handle power button as action togglebacklight
 // version 4 adds listbox support to reboot page
 // version 5 adds File Manager options, nano & Flash Current TWRP
-#define TW_THEME_VERSION 5
+// version 6 adds support for vendor_ab and recovery_ab, remove htcdumlock & Unmap Super Devices for A devices
+#define TW_THEME_VERSION 6
 
 // Also used:
 //   tw_boot_is_mountable
