@@ -16,6 +16,7 @@
 
 #include "updater/install.h"
 
+#include <android-base/properties.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -56,6 +57,7 @@
 #include <selinux/selinux.h>
 #include <ziparchive/zip_archive.h>
 
+#include "../twrp-functions.hpp"
 #include "edify/expr.h"
 #include "edify/updater_interface.h"
 #include "edify/updater_runtime_interface.h"
@@ -540,7 +542,6 @@ Value* DeleteFn(const char* name, State* state, const std::vector<std::unique_pt
   return StringValue(std::to_string(success));
 }
 
-
 Value* ShowProgressFn(const char* name, State* state,
                       const std::vector<std::unique_ptr<Expr>>& argv) {
   if (argv.size() != 2) {
@@ -601,7 +602,7 @@ Value* SetProgressFn(const char* name, State* state,
 //
 //   Note: package_dir needs to be a relative path; dest_dir needs to be an absolute path.
 Value* PackageExtractDirFn(const char* name, State* state,
-                           const std::vector<std::unique_ptr<Expr>>&argv) {
+                           const std::vector<std::unique_ptr<Expr>>& argv) {
   if (argv.size() != 2) {
     return ErrorAbort(state, kArgsParsingFailure, "%s() expects 2 args, got %zu", name,
                       argv.size());
@@ -700,7 +701,8 @@ Value* PackageExtractFileFn(const char* name, State* state,
     std::string buffer;
     buffer.resize(entry.uncompressed_length);
 
-    int32_t ret = ExtractToMemory(za, &entry, reinterpret_cast<uint8_t*>(&buffer[0]), buffer.size());
+    int32_t ret =
+        ExtractToMemory(za, &entry, reinterpret_cast<uint8_t*>(&buffer[0]), buffer.size());
     if (ret != 0) {
       return ErrorAbort(state, kPackageExtractFileFailure,
                         "%s: Failed to extract entry \"%s\" (%zu bytes) to memory: %s", name,
@@ -716,7 +718,8 @@ Value* PackageExtractFileFn(const char* name, State* state,
 //   before creating symlinks.
 Value* SymlinkFn(const char* name, State* state, const std::vector<std::unique_ptr<Expr>>& argv) {
   if (argv.size() == 0) {
-    return ErrorAbort(state, kArgsParsingFailure, "%s() expects 1+ args, got %zu", name, argv.size());
+    return ErrorAbort(state, kArgsParsingFailure, "%s() expects 1+ args, got %zu", name,
+                      argv.size());
   }
   std::string target;
   if (!Evaluate(state, argv[0], &target)) {
@@ -765,8 +768,7 @@ struct perm_parsed_args {
   uint64_t capabilities;
 };
 
-static struct perm_parsed_args ParsePermArgs(State * state,
-                                             const std::vector<std::string>& args) {
+static struct perm_parsed_args ParsePermArgs(State* state, const std::vector<std::string>& args) {
   struct perm_parsed_args parsed;
   int bad = 0;
   static int max_warnings = 20;
@@ -955,10 +957,11 @@ static int do_SetMetadataRecursive(const char* filename, const struct stat* stat
   return ApplyParsedPerms(recursive_state, filename, statptr, recursive_parsed_args);
 }
 
-static Value* SetMetadataFn(const char* name, State* state, const std::vector<std::unique_ptr<Expr>>& argv) {
+static Value* SetMetadataFn(const char* name, State* state,
+                            const std::vector<std::unique_ptr<Expr>>& argv) {
   if ((argv.size() % 2) != 1) {
-    return ErrorAbort(state, kArgsParsingFailure, "%s() expects an odd number of arguments, got %zu",
-                      name, argv.size());
+    return ErrorAbort(state, kArgsParsingFailure,
+                      "%s() expects an odd number of arguments, got %zu", name, argv.size());
   }
 
   std::vector<std::string> args;
@@ -1095,7 +1098,8 @@ Value* WipeCacheFn(const char* name, State* state, const std::vector<std::unique
   return StringValue("t");
 }
 
-Value* RunProgramFn(const char* name, State* state, const std::vector<std::unique_ptr<Expr>>& argv) {
+Value* RunProgramFn(const char* name, State* state,
+                    const std::vector<std::unique_ptr<Expr>>& argv) {
   if (argv.size() < 1) {
     return ErrorAbort(state, kArgsParsingFailure, "%s() expects at least 1 arg", name);
   }
@@ -1137,7 +1141,8 @@ Value* ReadFileFn(const char* name, State* state, const std::vector<std::unique_
 // write_value(value, filename)
 //   Writes 'value' to 'filename'.
 //   Example: write_value("960000", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
-Value* WriteValueFn(const char* name, State* state, const std::vector<std::unique_ptr<Expr>>& argv) {
+Value* WriteValueFn(const char* name, State* state,
+                    const std::vector<std::unique_ptr<Expr>>& argv) {
   if (argv.size() != 2) {
     return ErrorAbort(state, kArgsParsingFailure, "%s() expects 2 args, got %zu", name,
                       argv.size());
@@ -1267,7 +1272,8 @@ Value* GetStageFn(const char* name, State* state, const std::vector<std::unique_
   return StringValue(boot.stage);
 }
 
-Value* WipeBlockDeviceFn(const char* name, State* state, const std::vector<std::unique_ptr<Expr>>& argv) {
+Value* WipeBlockDeviceFn(const char* name, State* state,
+                         const std::vector<std::unique_ptr<Expr>>& argv) {
   if (argv.size() != 2) {
     return ErrorAbort(state, kArgsParsingFailure, "%s() expects 2 args, got %zu", name,
                       argv.size());
@@ -1290,7 +1296,8 @@ Value* WipeBlockDeviceFn(const char* name, State* state, const std::vector<std::
   return StringValue(status == 0 ? "t" : "");
 }
 
-Value* EnableRebootFn(const char* name, State* state, const std::vector<std::unique_ptr<Expr>>& argv) {
+Value* EnableRebootFn(const char* name, State* state,
+                      const std::vector<std::unique_ptr<Expr>>& argv) {
   if (!argv.empty()) {
     return ErrorAbort(state, kArgsParsingFailure, "%s() expects no args, got %zu", name,
                       argv.size());
@@ -1319,7 +1326,7 @@ Value* Tune2FsFn(const char* name, State* state, const std::vector<std::unique_p
   return StringValue("t");
 #else
   return ErrorAbort(state, kTune2FsFailure, "%s() support not present, no libtune2fs", name);
-#endif // HAVE_LIBTUNE2FS
+#endif  // HAVE_LIBTUNE2FS
 }
 
 Value* AddSlotSuffixFn(const char* name, State* state,
@@ -1334,6 +1341,39 @@ Value* AddSlotSuffixFn(const char* name, State* state,
   const std::string& arg = args[0];
   auto updater_runtime = state->updater->GetRuntime();
   return StringValue(updater_runtime->AddSlotSuffix(arg));
+}
+
+Value* GetXblDdrTypeFn(const char* name, State* state,
+                       const std::vector<std::unique_ptr<Expr>>& argv) {
+  std::string value = "ddr4";
+
+  bool is_ddr5 = IsDDR5();
+  if (is_ddr5) {
+    value = "ddr5";
+  }
+
+  return StringValue(value);
+}
+
+// OOS11 used ro.boot.ddr_type prop (0 = LPDDR4X; 1= LPDDR5)
+constexpr char kIsDDR5[] = "ro.boot.ddr_type";
+// OOS12 used /proc/devinfo/ddr_type (Device version: DDR4; Device version: DDR5)
+const std::string kDDRType = "/proc/devinfo/ddr_type";
+// Check if device is LPDDR4X or LPDDR5 (Oneplus8T/Oneplus9R)
+bool IsDDR5() {
+  if (TWFunc::Path_Exists(kDDRType)) {
+    std::string ddr_type;
+    if (TWFunc::read_file(kDDRType, ddr_type) != -1) {
+      std::string ddr5 = "DDR5";
+      std::string::size_type i = ddr_type.find(ddr5);
+      if (i != std::string::npos) {
+        return true;
+      } else {
+        return false;
+      }
+    }
+  }
+  return android::base::GetBoolProperty(kIsDDR5, false);
 }
 
 void RegisterInstallFunctions() {
@@ -1389,4 +1429,5 @@ void RegisterInstallFunctions() {
   RegisterFunction("tune2fs", Tune2FsFn);
 
   RegisterFunction("add_slot_suffix", AddSlotSuffixFn);
+  RegisterFunction("get_xblddr_type", GetXblDdrTypeFn);
 }
