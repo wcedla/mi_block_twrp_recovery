@@ -381,6 +381,8 @@ int main(int argc, char **argv) {
 	time_t StartupTime = time(NULL);
 	printf("Starting TWRP %s-%s on %s (pid %d)\n", TW_VERSION_STR, TW_GIT_REVISION, ctime(&StartupTime), getpid());
 
+	gui_print_color("warning", "compiled by wcedla\n");
+
 	// Load default values to set DataManager constants and handle ifdefs
 	DataManager::SetDefaultValues();
 	startupArgs startup;
